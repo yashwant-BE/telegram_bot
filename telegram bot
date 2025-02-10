@@ -1,0 +1,226 @@
+import logging
+import requests
+import datetime
+import asyncio
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+
+# Configuration
+TELEGRAM_BOT_TOKEN = ""
+GOOGLE_API_KEY = ""
+SEARCH_ENGINE_ID = ""
+OPENWEATHER_API_KEY = ""
+CITY = ""
+CHAT_ID = ""
+OPENAI_API_KEY = ""
+# Logging configuration
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Command Handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /start is issued."""
+    await update.message.reply_text('Hello! I am your Telegram bot. Use /help to see available commands.')
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /help is issued."""
+    help_text = """
+Available commands:
+/start - Start the bot
+/help - Show this help message
+/search <query> - Search Google
+/chat <message> - Chat with AI
+/date - Get current date
+/time - Get current time
+/location - Get location info
+/temperature - Get weather in Chennai
+    """
+    await update.message.reply_text(help_text)
+
+async def search_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search Google with the provided query."""
+    if not context.args:
+        await update.message.reply_text("Please provide a search query. Usage: /search <query>")
+        return
+    
+    query = " ".join(context.args)
+    url = f"https://www.googleapis.com/customsearch/v1?key={GOOGLE_API_KEY}&cx={SEARCH_ENGINE_ID}&q={query}"
+    
+    try:
+        response = requests.get(url)
+        results = response.json()
+        if "items" in results:
+            first_result = results["items"][0]
+            await update.message.reply_text(f"Top result:\n{first_result['title']}\n{first_result['link']}")
+        else:
+            await update.message.reply_text("No results found.")
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        await update.message.reply_text("Sorry, couldn't perform the search.")
+
+async def chat_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Chat with AI using OpenAI's GPT."""
+    if not context.args:
+        await update.message.reply_text("Please provide a message. Usage: /chat <message>")
+        return
+    
+    user_message = " ".join(context.args)
+    
+    try:
+        # Call OpenAI API
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "gpt-3.5-turbo",  # Use the appropriate model
+            "messages": [{"role": "user", "content": user_message}],
+            "max_tokens": 150
+        }
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
+        response_data = response.json()
+        
+        if "choices" in response_data:
+            ai_response = response_data["choices"][0]["message"]["content"]
+            await update.message.reply_text(f"AI: {ai_response}")
+        else:
+            await update.message.reply_text("Sorry, I couldn't generate a response.")
+    except Exception as e:
+        logger.error(f"AI chat error: {e}")
+        await update.message.reply_text("Sorry, something went wrong while processing your message.")
+
+async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send current date."""
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    await update.message.reply_text(f"Today's date: {today}")
+
+async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send current time."""
+    current_time = datetime.datetime.now().strftime("%H:%M:%S")
+    await update.message.reply_text(f"Current time: {current_time}")
+
+async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send location information."""
+    await update.message.reply_text(f"Currently set to: {CITY}")
+
+async def get_temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get current temperature."""
+    try:
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={OPENWEATHER_API_KEY}&units=metric"
+        response = requests.get(url)
+        data = response.json()
+        if "main" in data:
+            temp = data["main"]["temp"]
+            await update.message.reply_text(f"Current temperature in {CITY}: {temp}°C")
+        else:
+            await update.message.reply_text("Could not fetch temperature data.")
+    except Exception as e:
+        logger.error(f"Weather error: {e}")
+        await update.message.reply_text("Sorry, couldn't fetch the temperature.")
+
+# -------------------- Improved Reminder System -------------------- #
+async def schedule_reminders(app: Application):
+    """Schedule reminders using native asyncio timing"""
+    async def daily_reminder(message: str, hour: int, minute: int):
+        while True:
+            try:
+                now = datetime.datetime.now()
+                target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if now > target:
+                    target += datetime.timedelta(days=1)
+
+                wait_seconds = (target - now).total_seconds()
+                await asyncio.sleep(wait_seconds)
+                
+                await app.bot.send_message(chat_id=CHAT_ID, text=message)
+                logger.info(f"Sent reminder: {message}")
+            except Exception as e:
+                logger.error(f"Reminder failed: {e}")
+                await asyncio.sleep(60)  # Wait before retrying
+
+    reminders = [
+        (19, 0, "📚 Time to Study"),
+        (20, 0, "🧠 Time for Aptitude Test"),
+        (21, 0, "💻 Time to Code"),
+        (23, 0, "📅 Meeting Time!")
+    ]
+
+    tasks = []
+    for hour, minute, msg in reminders:
+        task = asyncio.create_task(daily_reminder(msg, hour, minute))
+        tasks.append(task)
+    return tasks
+
+# -------------------- Proper Lifecycle Management -------------------- #
+async def main():
+    """Main function with proper async handling"""
+    app = None
+    reminder_tasks = []
+    
+    try:
+        # Build application
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        # Register handlers
+        handlers = [
+            CommandHandler("start", start),
+            CommandHandler("help", help_command),
+            CommandHandler("search", search_google),
+            CommandHandler("chat", chat_ai),
+            CommandHandler("date", get_date),
+            CommandHandler("time", get_time),
+            CommandHandler("location", get_location),
+            CommandHandler("temperature", get_temperature)
+        ]
+        
+        for handler in handlers:
+            app.add_handler(handler)
+
+        # Schedule reminders
+        reminder_tasks = await schedule_reminders(app)
+        
+        logger.info("Bot starting...")
+        await app.initialize()
+        await app.start()
+        
+        # Run the bot
+        await app.updater.start_polling()
+        await asyncio.Event().wait()  # Run forever
+        
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
+    finally:
+        if reminder_tasks:
+            for task in reminder_tasks:
+                task.cancel()
+        if app:
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception as e:
+                logger.error(f"Shutdown error: {e}")
+
+def run_bot():
+    """Run the bot with proper event loop handling"""
+    try:
+        # Enable memory tracking
+        import tracemalloc
+        tracemalloc.start()
+        
+        # Run the bot using asyncio.run()
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+
+if __name__ == '__main__':
+    run_bot()
